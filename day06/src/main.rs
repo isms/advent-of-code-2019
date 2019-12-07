@@ -1,25 +1,27 @@
 use std::io::{self, BufRead, Error};
 use std::collections::HashMap;
+use std::cmp;
 
-fn orbits(key: &str, tree: &HashMap<String, String>) -> i32 {
-    let mut counter = 1;
-    let mut curr = key.clone();
-    loop {
-        if let Some(value) = tree.get(curr) {
-            if value == "COM" {
-                break;
-            }
-            counter += 1;
-            curr = &*value;
-        } else {
-            break;
-        }
-    }
-    counter
+type Tree = HashMap<String, String>;
+
+fn orbits(key: &str, tree: &Tree) -> i32 {
+    return path(key, tree).len() as i32;
 }
 
-fn create_tree(entries: Vec<String>) -> HashMap<String, String> {
-    let mut tree: HashMap<String, String> = HashMap::new();
+fn path(key: &str, tree: &Tree) -> Vec<String> {
+    let mut p: Vec<String> = vec![key.to_owned()];
+    let mut curr = key.clone();
+    loop {
+        curr = tree.get(curr).unwrap();
+        if curr == "COM" {
+            return p;
+        }
+        p.push(curr.to_owned());
+    }
+}
+
+fn create_tree(entries: Vec<String>) -> Tree {
+    let mut tree: Tree = HashMap::new();
     for line in entries.iter() {
         let parts: Vec<&str> = line.trim().split(")").collect();
         let child = parts[1].to_string();
@@ -29,19 +31,30 @@ fn create_tree(entries: Vec<String>) -> HashMap<String, String> {
     tree
 }
 
-fn part1(tree: &HashMap<String, String>) -> i32 {
+fn part1(tree: &Tree) -> i32 {
     let distances: Vec<i32> = tree.keys().cloned().into_iter().map(|k| orbits(&k, &tree)).collect();
     distances.iter().sum()
 }
 
-fn part2(tree: &HashMap<String, String>, from: &str, to: &str) -> i32 {
-    return 14;
+fn part2(tree: &Tree, node1: &str, node2: &str) -> i32 {
+    let h1: HashMap<String, i32> = path(node1, tree).iter().skip(1).enumerate().map(|(v, k)| (k.clone(), v as i32)).collect();
+    let h2: HashMap<String, i32> = path(node2, tree).iter().skip(1).enumerate().map(|(v, k)| (k.clone(), v as i32)).collect();
+    let mut min = i32::max_value();
+    for k1 in h1.keys().clone().into_iter() {
+        for k2 in h2.keys().clone().into_iter() {
+            if *k1 == *k2 {
+                min = cmp::min(min, h1.get(k1).unwrap() + h2.get(k2).unwrap());
+            }
+        }
+    }
+    min
 }
 
 fn main() -> Result<(), Error> {
     let stdin: Vec<String> = io::stdin().lock().lines().map(|x| x.unwrap()).collect();
     let tree = create_tree(stdin);
-    println!("{:?}", part1(&tree));
+    println!("part1: {:?}", part1(&tree));
+    println!("part2: {:?}", part2(&tree, "YOU", "SAN"));
     Ok(())
 }
 
@@ -64,7 +77,8 @@ E)J
 J)K
 K)L".lines().map(|x| x.to_owned()).collect();
         let tree = create_tree(small);
-        assert_eq!(part1(&tree), 42)
+        assert_eq!(path("H", &tree), vec!["H".to_owned(), "G".to_owned(), "B".to_owned()]);
+        assert_eq!(part1(&tree), 42);
     }
 
     #[test]
@@ -83,6 +97,6 @@ K)L
 K)YOU
 I)SAN".lines().map(|x| x.to_owned()).collect();
         let tree = create_tree(small);
-        assert_eq!(part2(&tree, "YOU", "SAN"), 42)
+        assert_eq!(part2(&tree, "YOU", "SAN"), 4);
     }
 }
