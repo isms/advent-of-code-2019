@@ -55,15 +55,20 @@ impl Instruction {
     }
 }
 
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Opcode {
     INIT,
     ADD(C, C, P),
     MUL(C, C, P),
     INPUT(P),
-    OUTPUT(P),
+    OUTPUT(C),
     EXIT,
+}
+
+#[derive(Debug, Clone)]
+struct Step {
+    opcode: Opcode,
+    raw: Memory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +83,7 @@ struct Program {
     eip: P,
     counter: usize,
     state: State,
-    last: Opcode,
+    last: Step,
     inputs: Vec<C>,
     outputs: Vec<C>,
 }
@@ -90,7 +95,10 @@ impl Program {
             eip: 0,
             counter: 0,
             state: RUNNING,
-            last: INIT,
+            last: Step {
+                opcode: INIT,
+                raw: Vec::new(),
+            },
             inputs: Vec::new(),
             outputs: Vec::new(),
         }
@@ -99,7 +107,7 @@ impl Program {
     fn fetch(&self, value: C, mode: Mode) -> C {
         match mode {
             Mode::VALUE => value,
-            Mode::REFERENCE => self.memory[value as P]
+            Mode::REFERENCE => self.memory[value as P],
         }
     }
 
@@ -110,9 +118,6 @@ impl Program {
 
     fn extract_opcode(&self) -> Opcode {
         let instr = Instruction::from(self.memory[self.eip]);
-        if DEBUG {
-            println!("Extracted instruction: {:?}", instr);
-        }
         match instr.code {
             1 => ADD(
                 self.fetch_offset(1, instr.get_mode(0)),
@@ -124,28 +129,31 @@ impl Program {
                 self.fetch_offset(2, instr.get_mode(1)),
                 self.fetch_offset(3, Mode::VALUE) as P,
             ),
-            3 => INPUT(
-                self.fetch_offset(1, Mode::VALUE) as P,
-            ),
-            4 => OUTPUT(
-                self.fetch_offset(1, Mode::VALUE) as P,
-            ),
+            3 => INPUT(self.fetch_offset(1, Mode::VALUE) as P),
+            4 => OUTPUT(self.fetch_offset(1, instr.get_mode(0))),
             99 => EXIT,
-            _ => panic!("Bad instruction {:}", &instr.code)
+            _ => panic!("Bad instruction {:}", &instr.code),
         }
     }
 
+    fn next_n(&self, n: usize) -> Memory {
+        self.memory[self.eip..self.eip + n].to_vec()
+    }
+
     fn apply(&mut self, opcode: Opcode) {
-        if DEBUG {
-            println!("Applying: {:?}", opcode);
-        }
+        let mut last = Step {
+            opcode,
+            raw: Vec::new(),
+        };
         match opcode {
             INIT => unimplemented!(),
             ADD(arg1, arg2, output) => {
+                last.raw = self.next_n(4);
                 self.memory[output] = arg1 + arg2;
                 self.eip += 4;
             }
             MUL(arg1, arg2, output) => {
+                last.raw = self.next_n(4);
                 self.memory[output] = arg1 * arg2;
                 self.eip += 4;
             }
@@ -153,15 +161,17 @@ impl Program {
                 self.state = HALTED;
             }
             INPUT(p) => {
+                last.raw = self.next_n(2);
                 self.memory[p] = self.inputs.pop().unwrap();
                 self.eip += 2;
             }
-            OUTPUT(p) => {
-                self.outputs.push(self.memory[p]);
+            OUTPUT(c) => {
+                last.raw = self.next_n(2);
+                self.outputs.push(c);
                 self.eip += 2;
             }
         }
-        self.last = opcode;
+        self.last = last;
         self.counter += 1;
     }
 
@@ -172,18 +182,12 @@ impl Program {
 
     fn run_until(&self, limit: Option<usize>) -> Self {
         let mut result = self.clone();
-        if DEBUG {
-            println!("{:?}", result);
-        }
         let max_counter = match limit {
             Some(l) => l,
-            None => usize::max_value()
+            None => usize::max_value(),
         };
         while result.state == RUNNING && result.counter <= max_counter {
             result.step_mut();
-            if DEBUG {
-                println!("{:?}", result);
-            }
         }
         result
     }
@@ -210,13 +214,14 @@ fn main() -> Result<(), Error> {
     result.inputs.push(1);
     while result.state != HALTED {
         result.step_mut();
+        println!("{:?}", result.last);
         if let Some(&latest) = result.outputs.last() {
             if latest != 0 {
-                break
+                break;
             }
         }
     }
-    println!("day 1: {:?}", result.memory[0]);
+    println!("day 1: {:?}", result);
 
     Ok(())
 }
