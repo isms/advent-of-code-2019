@@ -1,0 +1,16 @@
+[package]
+name = "day07"
+version = "0.1.0"
+authors = ["Isaac Slavitt <isaac.slavitt@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+itertools = "0.8"
+
+[lib]
+name = "intcode"
+path = "src/intcode.rs"
+
+[[bin]]
+name = "day07"
+path = "src/main.rs"
