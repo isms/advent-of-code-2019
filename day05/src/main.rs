@@ -3,8 +3,6 @@ use std::io::{BufRead, Error};
 use Opcode::*;
 use State::*;
 
-const DEBUG: bool = true;
-
 type C = i32;
 // contents
 type P = usize;
@@ -62,6 +60,10 @@ enum Opcode {
     MUL(C, C, P),
     INPUT(P),
     OUTPUT(C),
+    JMPT(C, P),
+    JMPF(C, P),
+    LT(C, C, P),
+    EQ(C, C, P),
     EXIT,
 }
 
@@ -131,6 +133,24 @@ impl Program {
             ),
             3 => INPUT(self.fetch_offset(1, Mode::VALUE) as P),
             4 => OUTPUT(self.fetch_offset(1, instr.get_mode(0))),
+            5 => JMPT(
+                self.fetch_offset(1, instr.get_mode(0)),
+                self.fetch_offset(2, instr.get_mode(1)) as P,
+            ),
+            6 => JMPF(
+                self.fetch_offset(1, instr.get_mode(0)),
+                self.fetch_offset(2, instr.get_mode(1)) as P,
+            ),
+            7 => LT(
+                self.fetch_offset(1, instr.get_mode(0)),
+                self.fetch_offset(2, instr.get_mode(1)),
+                self.fetch_offset(3, Mode::VALUE) as P,
+            ),
+            8 => EQ(
+                self.fetch_offset(1, instr.get_mode(0)),
+                self.fetch_offset(2, instr.get_mode(1)),
+                self.fetch_offset(3, Mode::VALUE) as P,
+            ),
             99 => EXIT,
             _ => panic!("Bad instruction {:}", &instr.code),
         }
@@ -164,6 +184,38 @@ impl Program {
                 last.raw = self.next_n(2);
                 self.memory[p] = self.inputs.pop().unwrap();
                 self.eip += 2;
+            }
+            JMPT(c, eip) => {
+                last.raw = self.next_n(3);
+                self.eip = match c {
+                    0 => self.eip + 3,
+                    _ => eip,
+                };
+            }
+            JMPF(c, eip) => {
+                last.raw = self.next_n(3);
+                self.eip = match c {
+                    0 => eip,
+                    _ => self.eip + 3,
+                };
+            }
+            LT(arg1, arg2, output) => {
+                last.raw = self.next_n(4);
+                if arg1 < arg2 {
+                    self.memory[output] = 1
+                } else {
+                    self.memory[output] = 0;
+                }
+                self.eip += 4;
+            }
+            EQ(arg1, arg2, output) => {
+                last.raw = self.next_n(4);
+                if arg1 == arg2 {
+                    self.memory[output] = 1
+                } else {
+                    self.memory[output] = 0;
+                }
+                self.eip += 4;
             }
             OUTPUT(c) => {
                 last.raw = self.next_n(2);
@@ -209,19 +261,15 @@ fn main() -> Result<(), Error> {
     }
     let program = Program::new(codes);
 
-    // day 1
-    let mut result = program.clone();
-    result.inputs.push(1);
-    while result.state != HALTED {
-        result.step_mut();
-        println!("{:?}", result.last);
-        if let Some(&latest) = result.outputs.last() {
-            if latest != 0 {
-                break;
-            }
-        }
-    }
+    let mut part1 = program.clone();
+    part1.inputs.push(1);
+    let result = part1.run();
     println!("day 1: {:?}", result);
+
+    let mut part2 = program.clone();
+    part2.inputs.push(5);
+    let result = part2.run();
+    println!("day 2: {:?}", result);
 
     Ok(())
 }
@@ -232,22 +280,124 @@ mod tests {
 
     #[test]
     fn test_run() {
-        let result = Program::new(vec![1, 0, 0, 0, 99]).run();
-        assert_eq!(result.memory, vec![1, 2, 0, 0, 99]);
+        let mut program = Program::new(vec![
+            3, 21, 1008, 21, 8, 20, 1005, 20, 22, 107, 8, 21, 20, 1006, 20, 31, 1106, 0, 36, 98, 0,
+            0, 1002, 21, 125, 20, 4, 20, 1105, 1, 46, 104, 999, 1105, 1, 46, 1101, 1000, 1, 20, 4,
+            20, 1105, 1, 46, 98, 99,
+        ]);
+        program.inputs.push(7);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![999]);
 
-        let result = Program::new(vec![2, 3, 0, 3, 99]).run();
-        assert_eq!(result.memory, vec![2, 3, 0, 6, 99]);
+        let mut program = Program::new(vec![
+            3, 21, 1008, 21, 8, 20, 1005, 20, 22, 107, 8, 21, 20, 1006, 20, 31, 1106, 0, 36, 98, 0,
+            0, 1002, 21, 125, 20, 4, 20, 1105, 1, 46, 104, 999, 1105, 1, 46, 1101, 1000, 1, 20, 4,
+            20, 1105, 1, 46, 98, 99,
+        ]);
+        program.inputs.push(8);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1000]);
+
+        let mut program = Program::new(vec![
+            3, 21, 1008, 21, 8, 20, 1005, 20, 22, 107, 8, 21, 20, 1006, 20, 31, 1106, 0, 36, 98, 0,
+            0, 1002, 21, 125, 20, 4, 20, 1105, 1, 46, 104, 999, 1105, 1, 46, 1101, 1000, 1, 20, 4,
+            20, 1105, 1, 46, 98, 99,
+        ]);
+        program.inputs.push(9);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1001]);
     }
 
     #[test]
-    fn test_extract_opcode() {
-        let program = Program::new(vec![1002, 4, 3, 4, 33]);
-        let opcode = program.extract_opcode();
-        assert_eq!(opcode, MUL(33, 3, 33));
+    fn test_equal_position() {
+        let mut program = Program::new(vec![3, 9, 8, 9, 10, 9, 4, 9, 99, -1, 8]);
+        program.inputs.push(8);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1]);
 
-        let program = Program::new(vec![1102, 4, 3, 4, 33]);
-        let opcode = program.extract_opcode();
-        assert_eq!(opcode, MUL(4, 3, 33));
+        let mut program = Program::new(vec![3, 9, 8, 9, 10, 9, 4, 9, 99, -1, 8]);
+        program.inputs.push(7);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+    }
+
+    #[test]
+    fn test_lt_position() {
+        let mut program = Program::new(vec![3, 9, 7, 9, 10, 9, 4, 9, 99, -1, 8]);
+        program.inputs.push(7);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1]);
+
+        let mut program = Program::new(vec![3, 9, 7, 9, 10, 9, 4, 9, 99, -1, 8]);
+        program.inputs.push(8);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+
+        let mut program = Program::new(vec![3, 9, 7, 9, 10, 9, 4, 9, 99, -1, 8]);
+        program.inputs.push(9);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+    }
+
+    #[test]
+    fn test_lt_immediate() {
+        let mut program = Program::new(vec![3, 3, 1107, -1, 8, 3, 4, 3, 99]);
+        program.inputs.push(7);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1]);
+
+        let mut program = Program::new(vec![3, 3, 1107, -1, 8, 3, 4, 3, 99]);
+        program.inputs.push(8);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+
+        let mut program = Program::new(vec![3, 3, 1107, -1, 8, 3, 4, 3, 99]);
+        program.inputs.push(9);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+    }
+
+    #[test]
+    fn test_equal_immediate() {
+        let mut program = Program::new(vec![3, 3, 1108, -1, 8, 3, 4, 3, 99]);
+        program.inputs.push(8);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1]);
+
+        let mut program = Program::new(vec![3, 3, 1108, -1, 8, 3, 4, 3, 99]);
+        program.inputs.push(7);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+    }
+
+    #[test]
+    fn test_jmp_position() {
+        let mut program = Program::new(vec![
+            3, 12, 6, 12, 15, 1, 13, 14, 13, 4, 13, 99, -1, 0, 1, 9,
+        ]);
+        program.inputs.push(0);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+
+        let mut program = Program::new(vec![
+            3, 12, 6, 12, 15, 1, 13, 14, 13, 4, 13, 99, -1, 0, 1, 9,
+        ]);
+        program.inputs.push(99);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1]);
+    }
+
+    #[test]
+    fn test_jmp_immediate() {
+        let mut program = Program::new(vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1]);
+        program.inputs.push(0);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![0]);
+
+        let mut program = Program::new(vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1]);
+        program.inputs.push(99);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1]);
     }
 
     #[test]
