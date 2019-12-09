@@ -3,25 +3,70 @@ use std::io::{BufRead, Error};
 use Opcode::*;
 use State::*;
 
-type C = i32; // contents
-type P = usize; // pointers
+const DEBUG: bool = true;
+
+type C = i32;
+// contents
+type P = usize;
+// pointers
 type Memory = Vec<C>;
 
+#[derive(Debug, Copy, Clone)]
+enum Mode {
+    REFERENCE,
+    VALUE,
+}
+
 #[derive(Debug, Clone)]
+struct Instruction {
+    code: C,
+    modes: Vec<Mode>,
+}
+
+impl Instruction {
+    fn from(value: C) -> Self {
+        let s = format!("{:}", value);
+        let code: i32 = s
+            .chars()
+            .rev()
+            .take(2)
+            .map(|c| c.to_digit(10).unwrap() as i32)
+            .enumerate()
+            .map(|(i, d)| 10_i32.pow(i as u32) * d)
+            .sum();
+        let modes: Vec<Mode> = s
+            .chars()
+            .rev()
+            .skip(2)
+            .map(|c| match c {
+                '0' => Mode::REFERENCE,
+                '1' => Mode::VALUE,
+                _ => panic!("Invalid mode"),
+            })
+            .collect();
+        Instruction { code, modes }
+    }
+
+    fn get_mode(&self, i: usize) -> Mode {
+        if i < self.modes.len() {
+            return self.modes[i];
+        }
+        Mode::REFERENCE
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Opcode {
+    INIT,
     ADD(C, C, P),
     MUL(C, C, P),
-    SAVE(C, P),
+    INPUT(P),
     OUTPUT(P),
     EXIT,
 }
 
-enum Mode {
-    PARAMETER,
-    IMMEDIATE,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum State {
     RUNNING,
     HALTED,
@@ -31,8 +76,11 @@ enum State {
 struct Program {
     memory: Memory,
     eip: P,
-    counter: C,
+    counter: usize,
     state: State,
+    last: Opcode,
+    inputs: Vec<C>,
+    outputs: Vec<C>,
 }
 
 impl Program {
@@ -42,112 +90,134 @@ impl Program {
             eip: 0,
             counter: 0,
             state: RUNNING,
+            last: INIT,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
         }
     }
 
-    fn apply(program: &mut Self, opcode: Opcode) {
-        program.counter += 1;
-        match opcode {
-            ADD(arg1, arg2, output) => {
-                program.memory[output] = arg1 + arg2;
-                program.eip += 4;
-            }
-            MUL(arg1, arg2, output) => {
-                program.memory[output] = arg1 * arg2;
-                program.eip += 4;
-            }
-            EXIT => {
-                program.state = HALTED;
-            }
-            _ => panic!(),
+    fn fetch(&self, value: C, mode: Mode) -> C {
+        match mode {
+            Mode::VALUE => value,
+            Mode::REFERENCE => self.memory[value as P]
         }
     }
 
-    fn extract_opcode(program: &Program) -> Opcode {
-        let s = String::from(program.memory[program.eip]);
-        let instr: i32 = (&s[s.len() - 2..]).parse::<i32>().unwrap();
-        let mut modes: Vec<Mode> = s
-            .chars()
-            .rev()
-            .skip(2)
-            .map(|c| match c {
-                '0' => Mode::PARAMETER,
-                '1' => Mode::IMMEDIATE,
-                _ => panic!("Invalid mode"),
-            })
-            .collect();
-        match instr {
+    fn fetch_offset(&self, offset: usize, mode: Mode) -> C {
+        let value: C = self.memory[self.eip + offset];
+        self.fetch(value, mode)
+    }
+
+    fn extract_opcode(&self) -> Opcode {
+        let instr = Instruction::from(self.memory[self.eip]);
+        if DEBUG {
+            println!("Extracted instruction: {:?}", instr);
+        }
+        match instr.code {
             1 => ADD(
-                program.memory[program.eip + 1] as C,
-                program.memory[program.eip + 2] as C,
-                program.memory[program.eip + 3] as P,
+                self.fetch_offset(1, instr.get_mode(0)),
+                self.fetch_offset(2, instr.get_mode(1)),
+                self.fetch_offset(3, Mode::VALUE) as P,
             ),
             2 => MUL(
-                program.memory[program.eip + 1] as C,
-                program.memory[program.eip + 2] as C,
-                program.memory[program.eip + 3] as P,
+                self.fetch_offset(1, instr.get_mode(0)),
+                self.fetch_offset(2, instr.get_mode(1)),
+                self.fetch_offset(3, Mode::VALUE) as P,
+            ),
+            3 => INPUT(
+                self.fetch_offset(1, Mode::VALUE) as P,
+            ),
+            4 => OUTPUT(
+                self.fetch_offset(1, Mode::VALUE) as P,
             ),
             99 => EXIT,
-            _ => panic!(
-                "Unexpected instruction '{:}' at eip={:}",
-                instr, program.eip
-            ),
+            _ => panic!("Bad instruction {:}", &instr.code)
         }
     }
 
-    fn step(program: Self) -> Self {
-        let mut r = program.clone();
-        let opcode = Program::extract_opcode(&r);
-        Program::apply(&mut r, opcode);
-        r
+    fn apply(&mut self, opcode: Opcode) {
+        if DEBUG {
+            println!("Applying: {:?}", opcode);
+        }
+        match opcode {
+            INIT => unimplemented!(),
+            ADD(arg1, arg2, output) => {
+                self.memory[output] = arg1 + arg2;
+                self.eip += 4;
+            }
+            MUL(arg1, arg2, output) => {
+                self.memory[output] = arg1 * arg2;
+                self.eip += 4;
+            }
+            EXIT => {
+                self.state = HALTED;
+            }
+            INPUT(p) => {
+                self.memory[p] = self.inputs.pop().unwrap();
+                self.eip += 2;
+            }
+            OUTPUT(p) => {
+                self.outputs.push(self.memory[p]);
+                self.eip += 2;
+            }
+        }
+        self.last = opcode;
+        self.counter += 1;
     }
 
-    fn run(program: Self) -> Self {
-        let mut result = program.clone();
-        loop {
-            match result.state {
-                HALTED => break,
-                RUNNING => {
-                    result = Program::step(result);
-                }
+    fn step_mut(&mut self) {
+        let opcode = self.extract_opcode();
+        self.apply(opcode);
+    }
+
+    fn run_until(&self, limit: Option<usize>) -> Self {
+        let mut result = self.clone();
+        if DEBUG {
+            println!("{:?}", result);
+        }
+        let max_counter = match limit {
+            Some(l) => l,
+            None => usize::max_value()
+        };
+        while result.state == RUNNING && result.counter <= max_counter {
+            result.step_mut();
+            if DEBUG {
+                println!("{:?}", result);
             }
         }
         result
+    }
+
+    fn run(&self) -> Self {
+        self.run_until(None)
     }
 }
 
 fn main() -> Result<(), Error> {
     let stdin = io::stdin();
     let mut codes: Memory = Vec::new();
-    for program in stdin.lock().lines() {
-        let program = String::from(program?);
-        let tokens: Vec<&str> = program.split(",").collect();
+    for line in stdin.lock().lines() {
+        let line = String::from(line?);
+        let tokens: Vec<&str> = line.split(",").collect();
         for token in tokens.iter() {
             codes.push(token.parse().unwrap());
         }
     }
-    codes[1] = 12;
-    codes[2] = 2;
     let program = Program::new(codes);
 
     // day 1
-    let result = Program::run(program.clone());
-    println!("day 1: {:?}", result.memory[0]);
-
-    // day 2
-    for noun in 0..99 {
-        for verb in 0..99 {
-            let mut candidate = program.clone();
-            candidate.memory[1] = noun;
-            candidate.memory[2] = verb;
-            let result = Program::run(candidate);
-            if result.memory[0] == 19690720 {
-                let answer = 100 * noun + verb;
-                println!("day 2: answer={:} [noun={:} verb={:}]", answer, noun, verb);
-                return Ok(());
+    let mut result = program.clone();
+    result.inputs.push(1);
+    while result.state != HALTED {
+        result.step_mut();
+        if let Some(&latest) = result.outputs.last() {
+            if latest != 0 {
+                break
             }
         }
     }
+    println!("day 1: {:?}", result.memory[0]);
+
     Ok(())
 }
 
@@ -157,20 +227,37 @@ mod tests {
 
     #[test]
     fn test_run() {
-        let program = Program::new(vec![1, 0, 0, 0, 99]);
-        let result = Program::run(program);
-        assert_eq!(result.memory, vec![2, 0, 0, 0, 99]);
+        let result = Program::new(vec![1, 0, 0, 0, 99]).run();
+        assert_eq!(result.memory, vec![1, 2, 0, 0, 99]);
 
-        let program = Program::new(vec![2, 3, 0, 3, 99]);
-        let result = Program::run(program);
+        let result = Program::new(vec![2, 3, 0, 3, 99]).run();
         assert_eq!(result.memory, vec![2, 3, 0, 6, 99]);
+    }
 
-        let program = Program::new(vec![2, 4, 4, 5, 99, 0]);
-        let result = Program::run(program);
-        assert_eq!(result.memory, vec![2, 4, 4, 5, 99, 9801]);
+    #[test]
+    fn test_extract_opcode() {
+        let program = Program::new(vec![1002, 4, 3, 4, 33]);
+        let opcode = program.extract_opcode();
+        assert_eq!(opcode, MUL(33, 3, 33));
 
-        let program = Program::new(vec![1, 1, 1, 4, 99, 5, 6, 0, 99]);
-        let result = Program::run(program);
-        assert_eq!(result.memory, vec![30, 1, 1, 4, 2, 5, 6, 0, 99]);
+        let program = Program::new(vec![1102, 4, 3, 4, 33]);
+        let opcode = program.extract_opcode();
+        assert_eq!(opcode, MUL(4, 3, 33));
+    }
+
+    #[test]
+    fn test_input_output() {
+        let mut program = Program::new(vec![3, 0, 4, 0, 99]);
+        program.inputs.push(1337);
+        assert_eq!(program.inputs, vec![1337]);
+        assert_eq!(program.outputs, Vec::new());
+        let result = program.run();
+        assert_eq!(result.inputs, Vec::new());
+        assert_eq!(result.outputs, vec![1337]);
+
+        let mut program = Program::new(vec![3, 2, 0, 0, 99]);
+        program.inputs.push(4);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![3]);
     }
 }
