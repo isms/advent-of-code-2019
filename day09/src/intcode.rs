@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+
 use std::fmt;
 use Opcode::*;
 use State::*;
@@ -386,11 +387,36 @@ mod tests {
         program.inputs.push(8);
         let result = program.run();
         assert_eq!(result.outputs, vec![1000]);
-        //
-        //        let mut program = Computer::new(codes.clone());
-        //        program.inputs.push(9);
-        //        let result = program.run();
-        //        assert_eq!(result.outputs, vec![1001]);
+
+        let mut program = Computer::new(codes.clone());
+        program.inputs.push(9);
+        let result = program.run();
+        assert_eq!(result.outputs, vec![1001]);
+    }
+
+    #[test]
+    fn test_add_and_mul() {
+        let program = vec![1, 0, 0, 0, 99];
+        let result = Computer::new(program.clone()).run();
+        assert_eq!(&result.memory[..program.len()], &vec![2, 0, 0, 0, 99][..]);
+
+        let program = vec![2, 3, 0, 3, 99];
+        let result = Computer::new(program.clone()).run();
+        assert_eq!(&result.memory[..program.len()], &vec![2, 3, 0, 6, 99][..]);
+
+        let program = vec![2, 4, 4, 5, 99, 0];
+        let result = Computer::new(program.clone()).run();
+        assert_eq!(
+            &result.memory[..program.len()],
+            &vec![2, 4, 4, 5, 99, 9801][..]
+        );
+
+        let program = vec![1, 1, 1, 4, 99, 5, 6, 0, 99];
+        let result = Computer::new(program.clone()).run();
+        assert_eq!(
+            &result.memory[..program.len()],
+            &vec![30, 1, 1, 4, 2, 5, 6, 0, 99][..]
+        );
     }
 
     #[test]
