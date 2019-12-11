@@ -1,4 +1,6 @@
-use intcode::{Computer, Memory, State};
+extern crate env_logger;
+
+use intcode::{Computer, Memory};
 use std::io;
 use std::io::{BufRead, Error};
 
@@ -16,13 +18,19 @@ fn read_program() -> Result<Computer, Error> {
 }
 
 fn main() -> Result<(), Error> {
-    let mut computer = read_program()?;
+    env_logger::init();
+    let program = read_program()?;
+
+    let mut computer = program.clone();
     computer.inputs.push(1);
-    while computer.state != State::Halted {
-        computer.step_mut();
-        // println!("{:?}", computer);
-    }
-    println!("{:?}", computer);
+    let result = computer.run();
+    println!("part 1: {:?}", result.outputs.get(0));
+
+    let mut computer = program.clone();
+    computer.inputs.push(2);
+    let result = computer.run();
+    println!("part 2: {:?}", result.outputs.get(0));
+
     Ok(())
 }
 
