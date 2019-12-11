@@ -1,61 +1,92 @@
-use std::collections::HashMap;
+use core::cmp;
 use Opcode::*;
 use State::*;
+use Value::*;
 
-type C = i32;
+type C = i64;
 pub type Memory = Vec<C>;
+const MEMORY_LENGTH: usize = 2048;
 
 #[derive(Debug, Copy, Clone)]
-pub enum Mode {
-    POSITION,
-    IMMEDIATE,
-    RELATIVE,
+pub enum Value {
+    Pointer(usize),
+    Immediate(C),
+    Relative(C),
 }
 
-#[derive(Debug, Clone)]
-pub struct Instruction {
-    raw: Memory,
-    opcode: Opcode,
-    modes: HashMap<usize, Mode>,
-    args: Memory,
-    values: Memory,
-}
-
-impl Instruction {
-    fn opcode(code: C, v: &Memory) -> Opcode {
-        match code {
-            1 => ADD(v[0], v[1], v[2]),
-            2 => MUL(v[0], v[1], v[2]),
-            3 => INPUT(v[0]),
-            4 => OUTPUT(v[0]),
-            5 => JMPT(v[0], v[1]),
-            6 => JMPF(v[0], v[1]),
-            7 => LT(v[0], v[1], v[2]),
-            8 => EQ(v[0], v[1], v[2]),
-            99 => EXIT,
-            _ => panic!("Bad instruction {:}", &code),
+impl Value {
+    fn from(number: C, flag: Option<char>) -> Self {
+        match flag {
+            Some('0') => Pointer(number as usize),
+            Some('1') => Immediate(number),
+            Some('2') => Relative(number),
+            Some(_) => panic!("Unexpected arg mode"),
+            None => Pointer(number as usize),
         }
     }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Opcode {
-    INIT,
-    ADD(C, C, C),
-    MUL(C, C, C),
-    INPUT(C),
-    OUTPUT(C),
-    JMPT(C, C),
-    JMPF(C, C),
-    LT(C, C, C),
-    EQ(C, C, C),
-    EXIT,
+    Init,
+    Add,
+    Multiply,
+    Input,
+    Output,
+    JumpTrue,
+    JumpFalse,
+    LessThan,
+    Equals,
+    SetRelativeBase,
+    Exit,
+}
+
+impl Opcode {
+    fn new(code: C) -> Opcode {
+        match code {
+            1 => Add,             // (v[0], v[1], v[2]),
+            2 => Multiply,        // (v[0], v[1], v[2]),
+            3 => Input,           // (v[0]),
+            4 => Output,          // (v[0]),
+            5 => JumpTrue,        // (v[0], v[1]),
+            6 => JumpFalse,       // (v[0], v[1]),
+            7 => LessThan,        //(v[0], v[1], v[2]),
+            8 => Equals,          // (v[0], v[1], v[2]),
+            9 => SetRelativeBase, // (v[0]),
+            99 => Exit,
+            _ => panic!("Bad instruction {:}", &code),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Init => 1,
+            Add => 4,
+            Multiply => 4,
+            Input => 2,
+            Output => 2,
+            JumpTrue => 3,
+            JumpFalse => 3,
+            LessThan => 4,
+            Equals => 4,
+            SetRelativeBase => 2,
+            Exit => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Instruction {
+    opcode: Opcode,
+    raw: Memory,
+    args: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    RUNNING,
-    HALTED,
+    Running,
+    AwaitingInput,
+    Halted,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +94,7 @@ pub struct Computer {
     pub memory: Memory,
     pub eip: usize,
     pub counter: usize,
+    pub relative_base: C,
     pub state: State,
     pub last: Instruction,
     pub inputs: Vec<C>,
@@ -71,17 +103,18 @@ pub struct Computer {
 
 impl Computer {
     pub fn new(memory: Memory) -> Self {
+        let mut extended_memory = memory.clone();
+        extended_memory.resize(MEMORY_LENGTH, 0);
         Computer {
-            memory,
+            memory: extended_memory,
             eip: 0,
             counter: 0,
-            state: RUNNING,
+            relative_base: 0,
+            state: Running,
             last: Instruction {
-                opcode: INIT,
+                opcode: Init,
                 raw: Vec::new(),
-                modes: HashMap::new(),
                 args: Vec::new(),
-                values: Vec::new(),
             },
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -92,131 +125,115 @@ impl Computer {
         self.memory[self.eip..self.eip + n].to_vec()
     }
 
-    fn extract_instruction(&self) -> Instruction {
-        let s = format!("{:}", self.memory[self.eip]);
-
-        // grab the opcode digits
-        let n = s.len();
-        let code: i32 = match s.len() {
-            1 => &s[..],
-            2 => &s[..],
-            _ => &s[n - 2..],
-        }
-        .parse()
-        .unwrap();
-
-        // take the right number of raw codes depending on what we extracted
-        let raw = self.next_n(match code {
-            1 => 4,
-            2 => 4,
-            3 => 2,
-            4 => 2,
-            5 => 3,
-            6 => 3,
-            7 => 4,
-            8 => 4,
-            99 => 1,
-            _ => panic!("Bad opcode: {}", code),
-        });
-
-        // args are the raw instruction codes after the first
-        let args: Memory = raw.clone().into_iter().skip(1).collect();
-
-        // parse which parameter modes are in use
-        let mode_flags: Vec<char> = s.chars().rev().skip(2).collect();
-        let mut modes: HashMap<usize, Mode> = (0..args.len())
-            .map(|i| match mode_flags.get(i) {
-                Some('0') => (i, Mode::POSITION),
-                Some('1') => (i, Mode::IMMEDIATE),
-                Some(a) => panic!("Invalid mode: {:}", a),
-                None => (i, Mode::POSITION),
-            })
-            .collect();
-
-        let _replaced_output_mode: Option<Mode> = match code {
-            1 => modes.insert(args.len() - 1, Mode::IMMEDIATE),
-            2 => modes.insert(args.len() - 1, Mode::IMMEDIATE),
-            3 => modes.insert(args.len() - 1, Mode::IMMEDIATE),
-            7 => modes.insert(args.len() - 1, Mode::IMMEDIATE),
-            8 => modes.insert(args.len() - 1, Mode::IMMEDIATE),
-            _ => None,
-        };
-
-        // read the actual values
-        let values: Memory = args
-            .iter()
-            .enumerate()
-            .map(
-                |(i, &a)| match modes.get(&i).expect("Did not find a mode") {
-                    Mode::IMMEDIATE => a,
-                    Mode::POSITION => self.memory[a as usize],
-                },
-            )
-            .collect();
-
-        let opcode = Instruction::opcode(code, &values);
-        Instruction {
-            raw,
-            opcode,
-            args,
-            values,
-            modes,
+    fn read(&self, location: Value) -> C {
+        match location {
+            Immediate(value) => value,
+            Pointer(addr) => self.memory[addr],
+            Relative(offset) => {
+                println!("reading relative: {:?}", location);
+                self.memory[(self.relative_base + offset) as usize]
+            }
         }
     }
 
-    fn apply(&mut self, instr: Instruction) {
-        match instr.opcode {
-            INIT => unimplemented!(),
-            ADD(arg1, arg2, output) => {
-                self.memory[output as usize] = arg1 + arg2;
-                self.eip += 4;
-            }
-            MUL(arg1, arg2, output) => {
-                self.memory[output as usize] = arg1 * arg2;
-                self.eip += 4;
-            }
-            EXIT => {
-                self.state = HALTED;
-            }
-            INPUT(p) => {
-                if let Some(input) = self.inputs.pop() {
-                    self.memory[p as usize] = input;
-                    self.eip += 2;
-                }
-            }
-            JMPT(c, eip) => {
-                self.eip = match c {
-                    0 => self.eip + 3,
-                    _ => eip as usize,
-                };
-            }
-            JMPF(c, eip) => {
-                self.eip = match c {
-                    0 => eip as usize,
-                    _ => self.eip + 3,
-                };
-            }
-            LT(arg1, arg2, output) => {
-                if arg1 < arg2 {
-                    self.memory[output as usize] = 1
-                } else {
-                    self.memory[output as usize] = 0;
-                }
-                self.eip += 4;
-            }
-            EQ(arg1, arg2, output) => {
-                if arg1 == arg2 {
-                    self.memory[output as usize] = 1
-                } else {
-                    self.memory[output as usize] = 0;
-                }
-                self.eip += 4;
-            }
-            OUTPUT(c) => {
-                self.outputs.push(c);
-                self.eip += 2;
+    fn write(&mut self, location: Value, value: C) {
+        match location {
+            Immediate(_) => panic!("Can't write a value in immediate mode"),
+            Pointer(addr) => self.memory[addr] = value,
+            Relative(offset) => {
+                println!("writing relative: {:?} [value={:}]", location, value);
+                self.memory[(self.relative_base + offset) as usize] = value
             }
         }
+    }
+
+    fn extract_instruction(&self) -> Instruction {
+        let s = format!("{:}", &self.memory[self.eip]);
+        let (args_part, code_part) = match s.len() {
+            1 => ("", &s[..]),
+            _ => s.split_at(s.len() - 2),
+        };
+        let code_raw = code_part.clone().parse().unwrap();
+        let opcode: Opcode = Opcode::new(code_raw);
+        let raw = self.next_n(opcode.len());
+        let args: Vec<Value> = raw
+            .iter()
+            .skip(1)
+            .enumerate()
+            .map(|(i, &a)| Value::from(a, args_part.chars().rev().nth(i)))
+            .collect();
+        Instruction { raw, opcode, args }
+    }
+
+    fn apply(&mut self, instr: Instruction) {
+        let mut next_eip = self.eip + instr.opcode.len();
+        match instr.opcode {
+            Init => unimplemented!(),
+            Add => {
+                let result = self.read(instr.args[0]) + self.read(instr.args[1]);
+                self.write(instr.args[2], result);
+            }
+            Multiply => {
+                let result = self.read(instr.args[0]) + self.read(instr.args[1]);
+                self.write(instr.args[2], result);
+            }
+            Exit => {
+                self.state = Halted;
+            }
+            Input => {
+                if let Some(input) = self.inputs.pop() {
+                    self.write(instr.args[0], input);
+                    self.state = State::Running;
+                } else {
+                    // do nothing and wait
+                    next_eip = self.eip;
+                    self.state = State::AwaitingInput;
+                }
+            }
+            JumpTrue => {
+                let value = self.read(instr.args[0]);
+                if value != 0 {
+                    let jump_to = self.read(instr.args[1]);
+                    next_eip = jump_to as usize;
+                }
+            }
+            JumpFalse => {
+                let value = self.read(instr.args[0]);
+                if value == 0 {
+                    let jump_to = self.read(instr.args[1]);
+                    next_eip = jump_to as usize;
+                }
+            }
+            LessThan => {
+                let less_than = self.read(instr.args[0]) < self.read(instr.args[1]);
+                self.write(
+                    instr.args[2],
+                    match less_than {
+                        true => 1,
+                        false => 0,
+                    },
+                );
+            }
+            Equals => {
+                let equal = self.read(instr.args[0]) == self.read(instr.args[1]);
+                self.write(
+                    instr.args[2],
+                    match equal {
+                        true => 1,
+                        false => 0,
+                    },
+                );
+            }
+            Output => {
+                let value = self.read(instr.args[0]);
+                self.outputs.push(value);
+            }
+            SetRelativeBase => {
+                let offset = self.read(instr.args[0]);
+                self.relative_base += offset;
+            }
+        }
+        self.eip = next_eip;
         self.last = instr;
         self.counter += 1;
     }
@@ -232,7 +249,7 @@ impl Computer {
             Some(l) => l,
             None => usize::max_value(),
         };
-        while result.state == RUNNING && result.counter <= max_counter {
+        while result.state == Running && result.counter <= max_counter {
             result.step_mut();
         }
         result

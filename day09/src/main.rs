@@ -1,4 +1,4 @@
-use intcode::{Computer, Memory};
+use intcode::{Computer, Memory, State};
 use std::io;
 use std::io::{BufRead, Error};
 
@@ -18,7 +18,11 @@ fn read_program() -> Result<Computer, Error> {
 fn main() -> Result<(), Error> {
     let mut computer = read_program()?;
     computer.inputs.push(1);
-    println!("{:?}", computer.run());
+    while computer.state != State::Halted {
+        computer.step_mut();
+        // println!("{:?}", computer);
+    }
+    println!("{:?}", computer);
     Ok(())
 }
 
@@ -28,21 +32,21 @@ mod tests {
 
     #[test]
     fn test_part1() {
-        let computer = Computer::new(vec![109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99]);
+        let computer = Computer::new(vec![
+            109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99,
+        ]);
         let result = computer.run();
-        assert_eq!(result.outputs, vec![109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99]);
-    }
+        assert_eq!(
+            result.outputs,
+            vec![109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99]
+        );
 
-    #[test]
-    fn test_jmp_immediate() {
-        let mut program = Computer::new(vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1]);
-        program.inputs.push(0);
-        let result = program.run();
-        assert_eq!(result.outputs, vec![0]);
+        let computer = Computer::new(vec![104, 1125899906842624, 99]);
+        let result = computer.run();
+        assert_eq!(result.outputs, vec![1125899906842624]);
 
-        let mut program = Computer::new(vec![3, 3, 1105, -1, 9, 1101, 0, 0, 12, 4, 12, 99, 1]);
-        program.inputs.push(99);
-        let result = program.run();
-        assert_eq!(result.outputs, vec![1]);
+        let computer = Computer::new(vec![1102, 34915192, 34915192, 7, 4, 7, 99, 0]);
+        let result = computer.run();
+        assert_eq!(format!("{}", result.outputs[0]).len(), 16);
     }
 }
